@@ -55,6 +55,7 @@ func main() {
 		wg.Add(1)
 		go newListener(target, port, &wg)
 	}
+	log.Println("waiting for request!")
 	wg.Wait()
 }
 
@@ -62,15 +63,14 @@ func newListener(target string, port int, wg *sync.WaitGroup) {
 	defer wg.Done()
 	incoming, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
-		log.Fatalf("could not start server on %d: %v", port, err)
+		log.Printf("could not start server on %d: %v\n", port, err)
 	}
-	log.Printf("address: %v\n", incoming.Addr())
-	log.Printf("server running on %d\n", port)
+	log.Printf("for target %q server running on: %v\n", target, incoming.Addr())
 
 	for {
 		client, err := incoming.Accept()
 		if err != nil {
-			log.Fatalf("could not accept client connection: %v", err)
+			log.Printf("could not accept client connection: %v\n", err)
 		}
 		defer func() {
 			remoteAddr := client.RemoteAddr()
@@ -87,7 +87,7 @@ func newListener(target string, port int, wg *sync.WaitGroup) {
 func handleRequest(conn net.Conn, target string) {
 	targetConn, err := net.Dial("tcp", target)
 	if err != nil {
-		log.Fatalf("could not connect to target: %v", err)
+		log.Printf("could not connect to target: %v", err)
 	}
 	// defer target.Close()
 	log.Printf("connection to server %v established!\n", targetConn.RemoteAddr())
