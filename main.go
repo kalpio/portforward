@@ -25,37 +25,40 @@ type iniFileSetting struct {
 	Port   int    `json:"port"`
 }
 
+const VERSION = "2021.08.10"
+
 func main() {
 	flag.StringVar(&target, "target", "", "target (<host>:<port>)")
 	flag.IntVar(&port, "port", 1337, "port")
 	flag.StringVar(&iniFile, "inifile", "", "initialize file")
 	flag.Parse()
 
+	logInfo(fmt.Sprintf("Version: %s", VERSION))
+
 	var wg sync.WaitGroup
 	if len(iniFile) > 0 {
 		var settings []iniFileSetting
 		f, err := os.Open(iniFile)
 		if err != nil {
-			log.Fatalf("could not open file: %s: %v", iniFile, err)
+			logFatal(fmt.Sprintf("could not open initialize file: %s: %v", iniFile, err))
 		}
 		bytes, err := ioutil.ReadAll(f)
 		if err != nil {
-			log.Fatalf("could not read data from stream: %v", err)
+			logFatal(fmt.Sprintf("could not read data from stream: %v", err))
 		}
 		if err := json.Unmarshal(bytes, &settings); err != nil {
-			log.Fatalf("could not unmarshal data: %v", err)
+			logFatal(fmt.Sprintf("could not unmarshall data: %v", err))
 		}
 
 		for _, s := range settings {
 			wg.Add(1)
 			go newListener(s.Target, s.Port, &wg)
 		}
-
 	} else {
 		wg.Add(1)
 		go newListener(target, port, &wg)
 	}
-	log.Println("waiting for request!")
+	logInfo("waiting for request!")
 	wg.Wait()
 }
 
@@ -63,22 +66,24 @@ func newListener(target string, port int, wg *sync.WaitGroup) {
 	defer wg.Done()
 	incoming, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
-		log.Printf("could not start server on %d: %v\n", port, err)
+		logError(fmt.Sprintf("could not start server on %d: %v", port, err))
 	}
-	log.Printf("for target %q server running on: %v\n", target, incoming.Addr())
+	logInfo(fmt.Sprintf("for destination %s server running on %s", target, incoming.Addr()))
 
 	for {
 		client, err := incoming.Accept()
 		if err != nil {
-			log.Printf("could not accept client connection: %v\n", err)
+			logError(fmt.Sprintf("could not accept client connection: %v", err))
 		}
 		defer func() {
 			remoteAddr := client.RemoteAddr()
-			log.Printf("closing client %s...\n", remoteAddr)
-			client.Close()
-			log.Printf("client %s closed!\n", remoteAddr)
+			logInfo(fmt.Sprintf("closing client %s...", remoteAddr))
+			if err := client.Close(); err != nil {
+				logError(fmt.Sprintf("closing client %s: %v", remoteAddr, err))
+			}
+			logInfo(fmt.Sprintf("client %s closed!", remoteAddr))
 		}()
-		log.Printf("client %q connected!\n", client.RemoteAddr())
+		logInfo(fmt.Sprintf("client %q connected!", client.RemoteAddr()))
 
 		go handleRequest(client, target)
 	}
@@ -87,22 +92,31 @@ func newListener(target string, port int, wg *sync.WaitGroup) {
 func handleRequest(conn net.Conn, target string) {
 	targetConn, err := net.Dial("tcp", target)
 	if err != nil {
-		log.Printf("could not connect to target: %v", err)
+		logError(fmt.Sprintf("could not connect to target: %v", err))
+		return
 	}
-	// defer target.Close()
-	log.Printf("connection to server %v established!\n", targetConn.RemoteAddr())
+	logInfo(fmt.Sprintf("connection to server %v established!", targetConn.RemoteAddr()))
 
 	go copyIO(conn, targetConn)
 	go copyIO(targetConn, conn)
-
-	// go func() { io.Copy(target, conn) }()
-	// go func() { io.Copy(conn, target) }()
 }
 
 func copyIO(src, dst net.Conn) {
 	written, err := io.Copy(dst, src)
 	if err != nil {
-		log.Printf("ERROR: could not copy data from: [%q] to [%q]: %v\n", src.LocalAddr(), dst.RemoteAddr(), err)
+		logError(fmt.Sprintf("copy data from: %q to %q: %v", src.LocalAddr(), dst.RemoteAddr(), err))
 	}
-	log.Printf("[%q] => [%q] | %s\n", src.LocalAddr(), dst.RemoteAddr(), humanize.Bytes(uint64(written)))
+	logInfo(fmt.Sprintf("copy data: %q to %q | %s", src.LocalAddr(), dst.RemoteAddr(), humanize.Bytes(uint64(written))))
+}
+
+func logError(str string) {
+	log.Printf(fmt.Sprintln(fmt.Sprintf("[ERROR] %s", str)))
+}
+
+func logInfo(str string) {
+	log.Printf(fmt.Sprintln(fmt.Sprintf("[INFO] %s", str)))
+}
+
+func logFatal(str string) {
+	log.Fatalf(fmt.Sprintf("[FATAL]: %s", str))
 }
