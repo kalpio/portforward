@@ -25,7 +25,7 @@ type iniFileSetting struct {
 	Port   int    `json:"port"`
 }
 
-const VERSION = "2021.08.10"
+const VERSION = "2021.08.13"
 
 func main() {
 	flag.StringVar(&target, "target", "", "target (<host>:<port>)")
@@ -52,29 +52,54 @@ func main() {
 
 		for _, s := range settings {
 			wg.Add(1)
+			createListenerForPort(s.Port)
 			go newListener(s.Target, s.Port, &wg)
 		}
 	} else {
 		wg.Add(1)
+		createListenerForPort(port)
 		go newListener(target, port, &wg)
 	}
 	logInfo("waiting for request!")
 	wg.Wait()
 }
 
+var listeners map[int]net.Listener
+
+func createListenerForPort(port int) {
+	if listeners == nil {
+		listeners = make(map[int]net.Listener)
+	}
+	_, ok := listeners[port]
+	if !ok {
+		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		listeners[port] = listener
+		if err != nil {
+			logError(err.Error())
+		}
+	}
+}
+
 func newListener(target string, port int, wg *sync.WaitGroup) {
 	defer wg.Done()
-	incoming, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		logError(fmt.Sprintf("could not start server on %d: %v", port, err))
+	listener, ok := listeners[port]
+	if !ok {
+		logError(fmt.Sprintf("could not find listener for port %d", port))
 	}
-	logInfo(fmt.Sprintf("for destination %s server running on %s", target, incoming.Addr()))
 
 	for {
-		client, err := incoming.Accept()
+		client, err := listener.Accept()
+		defer func() {
+			if err = client.Close(); err != nil {
+				logError("")
+			}
+		}()
 		if err != nil {
 			logError(fmt.Sprintf("could not accept client connection: %v", err))
 		}
+
+		logInfo(fmt.Sprintf("client local addr: %s", client.LocalAddr()))
+		logInfo(fmt.Sprintf("accept client: remote addr: %s target: %s", client.RemoteAddr(), target))
 		defer func() {
 			remoteAddr := client.RemoteAddr()
 			logInfo(fmt.Sprintf("closing client %s...", remoteAddr))
@@ -110,11 +135,11 @@ func copyIO(src, dst net.Conn) {
 }
 
 func logError(str string) {
-	log.Printf(fmt.Sprintln(fmt.Sprintf("[ERROR] %s", str)))
+	log.Println(fmt.Sprintf("[ERROR] %s", str))
 }
 
 func logInfo(str string) {
-	log.Printf(fmt.Sprintln(fmt.Sprintf("[INFO] %s", str)))
+	log.Println(fmt.Sprintf("[INFO] %s", str))
 }
 
 func logFatal(str string) {
