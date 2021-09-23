@@ -25,7 +25,7 @@ type iniFileSetting struct {
 	Port   int    `json:"port"`
 }
 
-const VERSION = "2021.08.13"
+const VERSION = "2021.09.23a"
 
 func main() {
 	flag.StringVar(&target, "target", "", "target (<host>:<port>)")
@@ -89,25 +89,13 @@ func newListener(target string, port int, wg *sync.WaitGroup) {
 
 	for {
 		client, err := listener.Accept()
-		defer func() {
-			if err = client.Close(); err != nil {
-				logError("")
-			}
-		}()
 		if err != nil {
 			logError(fmt.Sprintf("could not accept client connection: %v", err))
+			continue
 		}
 
-		logInfo(fmt.Sprintf("client local addr: %s", client.LocalAddr()))
-		logInfo(fmt.Sprintf("accept client: remote addr: %s target: %s", client.RemoteAddr(), target))
-		defer func() {
-			remoteAddr := client.RemoteAddr()
-			logInfo(fmt.Sprintf("closing client %s...", remoteAddr))
-			if err := client.Close(); err != nil {
-				logError(fmt.Sprintf("closing client %s: %v", remoteAddr, err))
-			}
-			logInfo(fmt.Sprintf("client %s closed!", remoteAddr))
-		}()
+		logInfo(fmt.Sprintf("CLIENT: local addr: %s", client.LocalAddr()))
+		logInfo(fmt.Sprintf("CLIENT: remote addr: %s target: %s", client.RemoteAddr(), target))
 		logInfo(fmt.Sprintf("client %q connected!", client.RemoteAddr()))
 
 		go handleRequest(client, target)
@@ -117,16 +105,28 @@ func newListener(target string, port int, wg *sync.WaitGroup) {
 func handleRequest(conn net.Conn, target string) {
 	targetConn, err := net.Dial("tcp", target)
 	if err != nil {
-		logError(fmt.Sprintf("could not connect to target: %v", err))
+		logError(fmt.Sprintf("could not connect to target [%s]: %v", target, err))
 		return
 	}
 	logInfo(fmt.Sprintf("connection to server %v established!", targetConn.RemoteAddr()))
 
-	go copyIO(conn, targetConn)
-	go copyIO(targetConn, conn)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go copyIO(conn, targetConn, &wg)
+
+	wg.Add(1)
+	go copyIO(targetConn, conn, &wg)
+
+	wg.Wait()
+
+	if err := targetConn.Close(); err != nil {
+		logError(fmt.Sprintf("could not close target %s: %v", targetConn.LocalAddr(), err))
+	}
 }
 
-func copyIO(src, dst net.Conn) {
+func copyIO(src, dst net.Conn, wg *sync.WaitGroup) {
+	defer wg.Done()
+	logInfo(fmt.Sprintf("starts copying %s => %s", src.LocalAddr(), dst.RemoteAddr()))
 	written, err := io.Copy(dst, src)
 	if err != nil {
 		logError(fmt.Sprintf("copy data from: %q to %q: %v", src.LocalAddr(), dst.RemoteAddr(), err))
