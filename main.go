@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/dustin/go-humanize"
 )
@@ -25,7 +26,18 @@ type iniFileSetting struct {
 	Port   int    `json:"port"`
 }
 
-const VERSION = "2021.09.23a"
+const VERSION = "2021.09.30b"
+
+func configLog() {
+	logFileName := fmt.Sprintf("%s.log", time.Now().Format("2006-01-02"))
+	f, err := os.OpenFile(fmt.Sprintf("./logs/%s", logFileName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		panic(err)
+	}
+
+	multiWriter := io.MultiWriter(f, os.Stdout)
+	log.SetOutput(multiWriter)
+}
 
 func main() {
 	flag.StringVar(&target, "target", "", "target (<host>:<port>)")
@@ -34,6 +46,8 @@ func main() {
 	flag.Parse()
 
 	logInfo(fmt.Sprintf("Version: %s", VERSION))
+
+	configLog()
 
 	var wg sync.WaitGroup
 	if len(iniFile) > 0 {
@@ -80,6 +94,8 @@ func createListenerForPort(port int) {
 	}
 }
 
+var connID uint64
+
 func newListener(target string, port int, wg *sync.WaitGroup) {
 	defer wg.Done()
 	listener, ok := listeners[port]
@@ -94,44 +110,46 @@ func newListener(target string, port int, wg *sync.WaitGroup) {
 			continue
 		}
 
-		logInfo(fmt.Sprintf("CLIENT: local addr: %s", client.LocalAddr()))
-		logInfo(fmt.Sprintf("CLIENT: remote addr: %s target: %s", client.RemoteAddr(), target))
-		logInfo(fmt.Sprintf("client %q connected!", client.RemoteAddr()))
+		connID++
+		logInfo(fmt.Sprintf("[%d] CLIENT: %s", connID, infoConnAddresses(client)))
+		logInfo(fmt.Sprintf("[%d] TARGET: %s", connID, target))
+		logInfo(fmt.Sprintf("[%d] client %s connected!", connID, infoConnAddresses(client)))
 
-		go handleRequest(client, target)
+		go handleRequest(connID, client, target)
 	}
 }
 
-func handleRequest(conn net.Conn, target string) {
+func handleRequest(requestID uint64, conn net.Conn, target string) {
 	targetConn, err := net.Dial("tcp", target)
 	if err != nil {
-		logError(fmt.Sprintf("could not connect to target [%s]: %v", target, err))
+		logError(fmt.Sprintf("[%d] could not connect to target [%s]: %v", requestID, target, err))
 		return
 	}
-	logInfo(fmt.Sprintf("connection to server %v established!", targetConn.RemoteAddr()))
+	logInfo(fmt.Sprintf("[%d] connection to server %v established!", requestID, targetConn.RemoteAddr()))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go copyIO(conn, targetConn, &wg)
+	go copyIO(requestID, conn, targetConn, &wg)
 
 	wg.Add(1)
-	go copyIO(targetConn, conn, &wg)
+	go copyIO(requestID, targetConn, conn, &wg)
 
 	wg.Wait()
 
 	if err := targetConn.Close(); err != nil {
-		logError(fmt.Sprintf("could not close target %s: %v", targetConn.LocalAddr(), err))
+		logError(fmt.Sprintf("[%d] could not close target %s: %v", requestID, infoConnAddresses(targetConn), err))
 	}
 }
 
-func copyIO(src, dst net.Conn, wg *sync.WaitGroup) {
+func copyIO(requestID uint64, src, dst net.Conn, wg *sync.WaitGroup) {
 	defer wg.Done()
-	logInfo(fmt.Sprintf("starts copying %s => %s", src.LocalAddr(), dst.RemoteAddr()))
+	logInfo(fmt.Sprintf("[%d] starts copying %s => %s", requestID, infoConnAddresses(src), infoConnAddresses(dst)))
 	written, err := io.Copy(dst, src)
 	if err != nil {
-		logError(fmt.Sprintf("copy data from: %q to %q: %v", src.LocalAddr(), dst.RemoteAddr(), err))
+		logError(fmt.Sprintf("[%d] copy data from: %q to %q: %v", requestID, infoConnAddresses(src), infoConnAddresses(dst), err))
+		return
 	}
-	logInfo(fmt.Sprintf("copy data: %q to %q | %s", src.LocalAddr(), dst.RemoteAddr(), humanize.Bytes(uint64(written))))
+	logInfo(fmt.Sprintf("[%d] copy data: %q to %q | %s", requestID, infoConnAddresses(src), infoConnAddresses(dst), humanize.Bytes(uint64(written))))
 }
 
 func logError(str string) {
@@ -144,4 +162,8 @@ func logInfo(str string) {
 
 func logFatal(str string) {
 	log.Fatalf(fmt.Sprintf("[FATAL]: %s", str))
+}
+
+func infoConnAddresses(conn net.Conn) string {
+	return fmt.Sprintf("[LOCAL: %s | REMOTE: %s]", conn.LocalAddr(), conn.RemoteAddr())
 }
